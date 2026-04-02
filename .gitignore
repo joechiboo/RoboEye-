@@ -1,13 +1,20 @@
-# Models (too large for git)
-models/*.caffemodel
-models/*.pb
-
 # Python
 __pycache__/
 *.pyc
 *.pyo
 .venv/
 venv/
+
+# Data & checkpoints
+data/
+checkpoints/
+
+# Source models (large, use LFS for what's needed)
+/models/*.caffemodel
+/models/*.pb
+
+# Claude Code
+.claude/
 
 # IDE
 .vscode/
