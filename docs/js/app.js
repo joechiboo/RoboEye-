@@ -52,6 +52,14 @@ async function init() {
             await faceapi.nets.ssdMobilenetv1.loadFromUri(FACE_API_MODEL_URL);
         }
 
+        // Load landmark model for face alignment (InsightFace needs it)
+        try {
+            await faceapi.nets.faceLandmark68Net.loadFromUri(FACE_API_MODEL_URL);
+            console.log("[INFO] faceLandmark68Net 載入成功");
+        } catch (e) {
+            console.warn("[WARN] faceLandmark68Net 載入失敗:", e.message);
+        }
+
         // Load ONNX age/gender models
         statusEl.textContent = "載入年齡/性別 CNN 模型...";
 
@@ -294,9 +302,127 @@ function extractFace(box) {
     return faceCanvas;
 }
 
+// ── Face alignment for InsightFace ───────────────────
+
+// InsightFace standard reference points for 96x96
+const INSIGHTFACE_REF_96 = [
+    [30.2946, 51.6963],  // left eye
+    [65.5318, 51.5014],  // right eye
+    [48.0252, 71.7366],  // nose
+    [33.5493, 92.3655],  // left mouth
+    [62.7299, 92.2041],  // right mouth
+];
+
+function getAffineTransform(src, dst) {
+    // Solve 2x3 affine matrix from 3 point pairs (use eyes + nose)
+    const s = src.slice(0, 3);
+    const d = dst.slice(0, 3);
+
+    // Build linear system: for each point pair (sx,sy)->(dx,dy)
+    // dx = a*sx + b*sy + c
+    // dy = d*sx + e*sy + f
+    const A = [
+        [s[0][0], s[0][1], 1, 0, 0, 0],
+        [0, 0, 0, s[0][0], s[0][1], 1],
+        [s[1][0], s[1][1], 1, 0, 0, 0],
+        [0, 0, 0, s[1][0], s[1][1], 1],
+        [s[2][0], s[2][1], 1, 0, 0, 0],
+        [0, 0, 0, s[2][0], s[2][1], 1],
+    ];
+    const b = [d[0][0], d[0][1], d[1][0], d[1][1], d[2][0], d[2][1]];
+
+    // Gaussian elimination
+    const n = 6;
+    const M = A.map((row, i) => [...row, b[i]]);
+    for (let col = 0; col < n; col++) {
+        let maxRow = col;
+        for (let row = col + 1; row < n; row++) {
+            if (Math.abs(M[row][col]) > Math.abs(M[maxRow][col])) maxRow = row;
+        }
+        [M[col], M[maxRow]] = [M[maxRow], M[col]];
+        for (let row = col + 1; row < n; row++) {
+            const f = M[row][col] / M[col][col];
+            for (let j = col; j <= n; j++) M[row][j] -= f * M[col][j];
+        }
+    }
+    const x = new Array(n);
+    for (let i = n - 1; i >= 0; i--) {
+        x[i] = M[i][n];
+        for (let j = i + 1; j < n; j++) x[i] -= M[i][j] * x[j];
+        x[i] /= M[i][i];
+    }
+    return x; // [a, b, c, d, e, f]
+}
+
+function alignFace(landmarks, size) {
+    // Extract 5 key points from 68-landmark model
+    // left eye center (points 36-41), right eye center (42-47), nose tip (30),
+    // left mouth corner (48), right mouth corner (54)
+    const pts = landmarks.positions;
+    const leftEye = [
+        (pts[36].x + pts[39].x) / 2,
+        (pts[36].y + pts[39].y) / 2,
+    ];
+    const rightEye = [
+        (pts[42].x + pts[45].x) / 2,
+        (pts[42].y + pts[45].y) / 2,
+    ];
+    const nose = [pts[30].x, pts[30].y];
+    const leftMouth = [pts[48].x, pts[48].y];
+    const rightMouth = [pts[54].x, pts[54].y];
+
+    const src = [leftEye, rightEye, nose, leftMouth, rightMouth];
+    const dst = INSIGHTFACE_REF_96;
+
+    const tf = getAffineTransform(src, dst);
+
+    // Apply affine transform
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    const ctx2 = canvas.getContext("2d");
+
+    // Draw pixel by pixel using inverse transform
+    // Forward: dst = tf * src, so inverse: src = tf_inv * dst
+    // Instead, sample from video for each dst pixel
+    const [a, b, c, d, e, f] = tf;
+    // Inverse of 2x2 part
+    const det = a * e - b * d;
+    const ia = e / det, ib = -b / det;
+    const id = -d / det, ie = a / det;
+    const ic = -(ia * c + ib * f);
+    const iF = -(id * c + ie * f);
+
+    // Use a temporary full-frame canvas to sample from
+    const tmpCanvas = document.createElement("canvas");
+    tmpCanvas.width = video.videoWidth;
+    tmpCanvas.height = video.videoHeight;
+    const tmpCtx = tmpCanvas.getContext("2d");
+    tmpCtx.drawImage(video, 0, 0);
+    const imgData = tmpCtx.getImageData(0, 0, tmpCanvas.width, tmpCanvas.height);
+
+    const outData = ctx2.createImageData(size, size);
+    for (let dy = 0; dy < size; dy++) {
+        for (let dx = 0; dx < size; dx++) {
+            const sx = Math.round(ia * dx + ib * dy + ic);
+            const sy = Math.round(id * dx + ie * dy + iF);
+            if (sx >= 0 && sx < tmpCanvas.width && sy >= 0 && sy < tmpCanvas.height) {
+                const si = (sy * tmpCanvas.width + sx) * 4;
+                const di = (dy * size + dx) * 4;
+                outData.data[di] = imgData.data[si];
+                outData.data[di + 1] = imgData.data[si + 1];
+                outData.data[di + 2] = imgData.data[si + 2];
+                outData.data[di + 3] = 255;
+            }
+        }
+    }
+    ctx2.putImageData(outData, 0, 0);
+    return canvas;
+}
+
 // ── Age history (5-second sliding window) ────────────
 
-const AGE_WINDOW_MS = 5000;
+const AGE_WINDOW_MS = 3000;
 const ageHistory = []; // { time, age }
 
 function pushAge(age) {
@@ -315,7 +441,7 @@ function getAgeRange() {
     if (recent.length === 0) return null;
     const ages = recent.map(e => e.age).sort((a, b) => a - b);
     // Trim top/bottom 10% to remove outliers
-    const trim = Math.floor(ages.length * 0.1);
+    const trim = Math.floor(ages.length * 0.2);
     const trimmed = ages.slice(trim, ages.length - trim);
     if (trimmed.length === 0) return { min: ages[0], max: ages[ages.length - 1] };
     return { min: trimmed[0], max: trimmed[trimmed.length - 1] };
@@ -332,14 +458,25 @@ async function detectLoop() {
     const faceOptions = faceapi.nets.tinyFaceDetector.isLoaded
         ? new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })
         : new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
-    const detections = await faceapi.detectAllFaces(video, faceOptions);
+    const method = typeof currentMethod !== "undefined" ? currentMethod : "mobilenet";
+    const needLandmarks = method === "insightface" && faceapi.nets.faceLandmark68Net.isLoaded;
+
+    const detections = needLandmarks
+        ? await faceapi.detectAllFaces(video, faceOptions).withFaceLandmarks()
+        : await faceapi.detectAllFaces(video, faceOptions);
 
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     faceCountEl.textContent = detections.length;
 
     for (const det of detections) {
-        const box = det.box;
-        const faceCanvas = extractFace(box);
+        const box = needLandmarks ? det.detection.box : det.box;
+
+        let faceCanvas;
+        if (needLandmarks && det.landmarks) {
+            faceCanvas = alignFace(det.landmarks, 96);
+        } else {
+            faceCanvas = extractFace(box);
+        }
         if (faceCanvas.width < 10 || faceCanvas.height < 10) continue;
 
         const result = await infer(faceCanvas);
@@ -356,11 +493,17 @@ async function detectLoop() {
 
         if (result) {
             const ageNum = parseFloat(result.age);
-            pushAge(ageNum);
-            const range = getAgeRange();
-            const ageLabel = range
-                ? `${Math.round(range.min)} - ${Math.round(range.max)}y`
-                : `${result.age}y`;
+            let ageLabel;
+            if (isNaN(ageNum)) {
+                // Caffe returns age bracket string like "(25-32)"
+                ageLabel = result.age;
+            } else {
+                pushAge(ageNum);
+                const range = getAgeRange();
+                ageLabel = range
+                    ? `${Math.round(range.min)} - ${Math.round(range.max)}y`
+                    : `${result.age}y`;
+            }
             const label = `${ageLabel}, ${result.gender} (${(result.confidence * 100).toFixed(0)}%)`;
             ctx.font = "bold 14px sans-serif";
             const textWidth = ctx.measureText(label).width;
