@@ -228,7 +228,7 @@ async function inferCaffe(faceCanvas) {
 
 async function inferInsightFace(faceCanvas) {
     if (!sessions.insightface) return null;
-    // InsightFace genderage model: 96x96 input, normalized to [-1, 1]
+    // InsightFace genderage model: 96x96 input, blobFromImage(1.0/1, mean=0, swapRB)
     const size = 96;
     const resizeCanvas = document.createElement("canvas");
     resizeCanvas.width = size;
@@ -241,20 +241,22 @@ async function inferInsightFace(faceCanvas) {
     const floatData = new Float32Array(3 * size * size);
     const pixelCount = size * size;
 
+    // RGB→BGR, scale to [0,1] (matching cv2.dnn.blobFromImage with scale=1.0, mean=0)
     for (let i = 0; i < pixelCount; i++) {
-        floatData[i] = (data[i * 4] / 255.0 - 0.5) / 0.5;
-        floatData[pixelCount + i] = (data[i * 4 + 1] / 255.0 - 0.5) / 0.5;
-        floatData[2 * pixelCount + i] = (data[i * 4 + 2] / 255.0 - 0.5) / 0.5;
+        floatData[i] = data[i * 4 + 2] / 255.0;              // B
+        floatData[pixelCount + i] = data[i * 4 + 1] / 255.0;  // G
+        floatData[2 * pixelCount + i] = data[i * 4] / 255.0;  // R
     }
 
     const inputTensor = new ort.Tensor("float32", floatData, [1, 3, size, size]);
     const results = await sessions.insightface.run({ data: inputTensor });
 
-    // Output fc1: [gender_male_logit, gender_female_logit, age]
+    // Output fc1: [gender0, gender1, age_normalized] — age = pred[2] * 100
     const output = Array.from(results.fc1.data);
     const genderIdx = output[0] > output[1] ? 0 : 1;
+    const age = Math.round(output[2] * 100);
     return {
-        age: output[2].toFixed(1),
+        age: age.toString(),
         gender: GENDER_LABELS[genderIdx],
         confidence: softmax([output[0], output[1]])[genderIdx],
     };
