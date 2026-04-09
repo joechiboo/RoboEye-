@@ -241,24 +241,28 @@ async function inferInsightFace(faceCanvas) {
     const floatData = new Float32Array(3 * size * size);
     const pixelCount = size * size;
 
-    // RGB→BGR, scale to [0,1] (matching cv2.dnn.blobFromImage with scale=1.0, mean=0)
+    // RGB, 0-255 (matching cv2.dnn.blobFromImage with scale=1.0, mean=0, swapRB=True)
     for (let i = 0; i < pixelCount; i++) {
-        floatData[i] = data[i * 4 + 2] / 255.0;              // B
-        floatData[pixelCount + i] = data[i * 4 + 1] / 255.0;  // G
-        floatData[2 * pixelCount + i] = data[i * 4] / 255.0;  // R
+        floatData[i] = data[i * 4];                // R
+        floatData[pixelCount + i] = data[i * 4 + 1]; // G
+        floatData[2 * pixelCount + i] = data[i * 4 + 2]; // B
     }
 
     const inputTensor = new ort.Tensor("float32", floatData, [1, 3, size, size]);
     const results = await sessions.insightface.run({ data: inputTensor });
 
     // Output fc1: [gender0, gender1, age_normalized] — age = pred[2] * 100
+    // InsightFace convention: argmax=0 → Female, argmax=1 → Male
     const output = Array.from(results.fc1.data);
-    const genderIdx = output[0] > output[1] ? 0 : 1;
+    const isMale = output[1] > output[0];
+    const genderIdx = isMale ? 0 : 1; // GENDER_LABELS: ["Male", "Female"]
+    const probs = softmax([output[0], output[1]]);
+    const confidence = isMale ? probs[1] : probs[0];
     const age = Math.round(output[2] * 100);
     return {
         age: age.toString(),
         gender: GENDER_LABELS[genderIdx],
-        confidence: softmax([output[0], output[1]])[genderIdx],
+        confidence,
     };
 }
 
@@ -288,6 +292,33 @@ function extractFace(box) {
         0, 0, faceCanvas.width, faceCanvas.height
     );
     return faceCanvas;
+}
+
+// ── Age history (5-second sliding window) ────────────
+
+const AGE_WINDOW_MS = 5000;
+const ageHistory = []; // { time, age }
+
+function pushAge(age) {
+    const now = performance.now();
+    ageHistory.push({ time: now, age });
+    // Evict entries older than 5 seconds
+    while (ageHistory.length > 0 && now - ageHistory[0].time > AGE_WINDOW_MS) {
+        ageHistory.shift();
+    }
+}
+
+function getAgeRange() {
+    if (ageHistory.length === 0) return null;
+    const now = performance.now();
+    const recent = ageHistory.filter(e => now - e.time <= AGE_WINDOW_MS);
+    if (recent.length === 0) return null;
+    const ages = recent.map(e => e.age).sort((a, b) => a - b);
+    // Trim top/bottom 10% to remove outliers
+    const trim = Math.floor(ages.length * 0.1);
+    const trimmed = ages.slice(trim, ages.length - trim);
+    if (trimmed.length === 0) return { min: ages[0], max: ages[ages.length - 1] };
+    return { min: trimmed[0], max: trimmed[trimmed.length - 1] };
 }
 
 // ── Detection loop ────────────────────────────────────
@@ -324,7 +355,13 @@ async function detectLoop() {
         ctx.strokeRect(x, y, w, h);
 
         if (result) {
-            const label = `${result.gender} (${(result.confidence * 100).toFixed(0)}%), ${result.age}y`;
+            const ageNum = parseFloat(result.age);
+            pushAge(ageNum);
+            const range = getAgeRange();
+            const ageLabel = range
+                ? `${Math.round(range.min)} - ${Math.round(range.max)}y`
+                : `${result.age}y`;
+            const label = `${ageLabel}, ${result.gender} (${(result.confidence * 100).toFixed(0)}%)`;
             ctx.font = "bold 14px sans-serif";
             const textWidth = ctx.measureText(label).width;
 
