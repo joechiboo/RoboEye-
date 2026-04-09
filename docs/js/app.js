@@ -228,8 +228,8 @@ async function inferCaffe(faceCanvas) {
 
 async function inferInsightFace(faceCanvas) {
     if (!sessions.insightface) return null;
-    // InsightFace uses 112x112 input, similar normalization
-    const size = 112;
+    // InsightFace genderage model: 96x96 input, normalized to [-1, 1]
+    const size = 96;
     const resizeCanvas = document.createElement("canvas");
     resizeCanvas.width = size;
     resizeCanvas.height = size;
@@ -248,14 +248,13 @@ async function inferInsightFace(faceCanvas) {
     }
 
     const inputTensor = new ort.Tensor("float32", floatData, [1, 3, size, size]);
-    const results = await sessions.insightface.run({ input: inputTensor });
+    const results = await sessions.insightface.run({ data: inputTensor });
 
-    // InsightFace outputs age and gender differently per model variant
-    const output = Array.from(Object.values(results)[0].data);
-    const age = output[2] != null ? output[2] : output[0];
+    // Output fc1: [gender_male_logit, gender_female_logit, age]
+    const output = Array.from(results.fc1.data);
     const genderIdx = output[0] > output[1] ? 0 : 1;
     return {
-        age: age.toFixed(1),
+        age: output[2].toFixed(1),
         gender: GENDER_LABELS[genderIdx],
         confidence: softmax([output[0], output[1]])[genderIdx],
     };
