@@ -52,13 +52,6 @@
             min-width: 0;
         }
 
-        @media (max-width: 960px) {
-            #app {
-                grid-template-columns: 1fr;
-                max-width: 720px;
-            }
-        }
-
         .video-container {
             position: relative;
             width: 100%;
@@ -66,6 +59,7 @@
             overflow: hidden;
             background: #1a1a1a;
             aspect-ratio: 4 / 3;
+            max-height: 60vh;
         }
 
         #webcam {
@@ -230,6 +224,19 @@
             gap: 1rem;
         }
 
+        @media (max-width: 640px) {
+            header { padding: 1rem 0.5rem 0.5rem; }
+            header h1 { font-size: 1.4rem; }
+            header p { font-size: 0.8rem; }
+
+            #app { padding: 0 0.6rem 1.5rem; gap: 1rem; }
+
+            .bench-cols { grid-template-columns: 1fr; }
+            .video-container { max-height: 50vh; }
+            .method-btn { padding: 0.4rem 0.8rem; font-size: 0.78rem; }
+            #bench-history-table th, #bench-history-table td { font-size: 0.7rem; }
+        }
+
         .bench-col h4 {
             font-size: 0.8rem;
             color: #888;
@@ -293,6 +300,22 @@
             color: #aaa;
             font-weight: 600;
             background: #151515;
+        }
+
+        /* ── Narrow viewport (split-screen / tablet / mobile) ── */
+        @media (max-width: 1024px) {
+            #app {
+                grid-template-columns: 1fr;
+                max-width: 720px;
+            }
+            header { display: none; }
+            #method-info { display: none; }
+            #btn-stop { display: none; }
+            #btn-start:disabled { display: none; }
+            #status { display: none; }
+            .stats { display: none; }
+            .video-container { max-height: 45vh; }
+            .col-left { gap: 0.6rem; }
         }
     </style>
 </head>
