@@ -93,7 +93,7 @@ async function loadModel(name, path) {
         });
         console.log(`[INFO] ${name} 模型載入成功`);
     } catch (err) {
-        console.warn(`[WARN] ${name} 模型載入失敗 (${path}):`, err.message);
+        console.warn(`[WARN] ${name} 模型載入失敗 (${path}):`, err);
     }
 }
 
@@ -470,10 +470,13 @@ function getStableGender() {
     // Confidence range among frames matching the winning gender
     const matching = genderHistory.filter(e => e.gender === bestGender).map(e => e.confidence);
     matching.sort((a, b) => a - b);
+    // Trim top/bottom 20% to remove outliers (same as age range)
+    const trim = Math.floor(matching.length * 0.2);
+    const trimmed = matching.length > 2 ? matching.slice(trim, matching.length - trim) : matching;
     return {
         gender: bestGender,
-        minConf: matching[0],
-        maxConf: matching[matching.length - 1],
+        minConf: trimmed[0],
+        maxConf: trimmed[trimmed.length - 1],
         ratio: bestCount / genderHistory.length,
     };
 }
