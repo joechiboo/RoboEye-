@@ -284,6 +284,16 @@
 
         .bench-good { color: #00e676; }
         .bench-bad { color: #ff5252; }
+
+        #bench-history-table th, #bench-history-table td {
+            padding: 0.35rem 0.4rem;
+            font-size: 0.78rem;
+        }
+        #bench-history-table tfoot td {
+            color: #aaa;
+            font-weight: 600;
+            background: #151515;
+        }
     </style>
 </head>
 <body>
@@ -355,6 +365,25 @@
                 </table>
                 <div id="bench-empty" style="color:#666;font-size:0.85rem;padding:1rem;text-align:center">尚未有結果</div>
             </div>
+        </div>
+
+        <div class="bench-history-wrap" id="bench-history-wrap" style="display:none;margin-top:1rem;border-top:1px solid #2a2a2a;padding-top:0.8rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+                <h4 style="font-size:0.8rem;color:#888;text-transform:uppercase;font-weight:600">歷次結果累積</h4>
+                <button id="btn-bench-reset" style="background:#333;color:#aaa;padding:0.3rem 0.8rem;font-size:0.75rem">清除</button>
+            </div>
+            <table class="bench-table" id="bench-history-table">
+                <thead>
+                    <tr>
+                        <th>Run</th>
+                        <th>Caffe (err)</th>
+                        <th>DEX (err / std)</th>
+                        <th>InsightFace (err / std)</th>
+                    </tr>
+                </thead>
+                <tbody id="bench-history-tbody"></tbody>
+                <tfoot id="bench-history-tfoot" style="border-top:2px solid #2a2a2a"></tfoot>
+            </table>
         </div>
         </div>
     </div>

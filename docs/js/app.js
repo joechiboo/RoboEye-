@@ -661,7 +661,7 @@ async function detectFaceForBench() {
     return dets.length > 0 ? dets[0] : null;
 }
 
-async function runOneSample(idx) {
+async function captureOneFrame(idx) {
     const det = await detectFaceForBench();
     if (!det) return null;
     const box = det.detection ? det.detection.box : det.box;
@@ -670,13 +670,20 @@ async function runOneSample(idx) {
     const alignedFace = (det.landmarks && faceapi.nets.faceLandmark68Net.isLoaded)
         ? alignFace(det.landmarks, 96)
         : cropFace;
+    return { idx: idx + 1, cropFace, alignedFace };
+}
 
-    const [caffe, mob, ins] = await Promise.all([
-        inferCaffe(cropFace),
-        inferMobileNet(cropFace),
-        inferInsightFace(alignedFace),
-    ]);
-    return { idx: idx + 1, caffe, mob, ins };
+async function runMethod(name, fn, frames, faceField) {
+    const results = [];
+    for (const frame of frames) {
+        try {
+            results.push(await fn(frame[faceField]));
+        } catch (err) {
+            console.warn(`[BENCH] ${name} #${frame.idx} 推論失敗:`, err);
+            results.push(null);
+        }
+    }
+    return results;
 }
 
 function appendLog(sample) {
@@ -691,19 +698,24 @@ function appendLog(sample) {
     benchLogs.scrollTop = benchLogs.scrollHeight;
 }
 
+// ── History: accumulate runs ──────────────────────────
+
+const benchHistory = []; // { caffe: {err, gender, total}, mob: {err, std, gender, total}, ins: {...} }
+
 function summarize(samples, trueAge, trueGender) {
+    const runSummary = { caffe: null, mob: null, ins: null };
     const rows = [];
 
     // Method 1: Caffe (bracket)
     const caffeSamples = samples.map(s => s.caffe).filter(Boolean);
     if (caffeSamples.length) {
         const ages = caffeSamples.map(s => CAFFE_AGE_MIDPOINT[s.age] || 0);
-        const m = mean(ages);
+        const m = mean(ages), sd = std(ages);
         const correct = caffeSamples.filter(s => s.gender === trueGender).length;
-        // Most common bracket
         const bracketCount = {};
         caffeSamples.forEach(s => bracketCount[s.age] = (bracketCount[s.age] || 0) + 1);
         const topBracket = Object.entries(bracketCount).sort((a, b) => b[1] - a[1])[0][0];
+        runSummary.caffe = { err: m - trueAge, std: sd, gender: correct, total: caffeSamples.length };
         rows.push({
             name: "方法1 Caffe",
             ageStr: `${topBracket} (mid ${m.toFixed(0)})`,
@@ -718,6 +730,7 @@ function summarize(samples, trueAge, trueGender) {
         const ages = mobSamples.map(s => parseFloat(s.age));
         const m = mean(ages), sd = std(ages);
         const correct = mobSamples.filter(s => s.gender === trueGender).length;
+        runSummary.mob = { err: m - trueAge, std: sd, gender: correct, total: mobSamples.length };
         rows.push({
             name: "方法2 DEX",
             ageStr: `${m.toFixed(1)} ± ${sd.toFixed(1)}`,
@@ -732,6 +745,7 @@ function summarize(samples, trueAge, trueGender) {
         const ages = insSamples.map(s => parseFloat(s.age));
         const m = mean(ages), sd = std(ages);
         const correct = insSamples.filter(s => s.gender === trueGender).length;
+        runSummary.ins = { err: m - trueAge, std: sd, gender: correct, total: insSamples.length };
         rows.push({
             name: "方法3 InsightFace",
             ageStr: `${m.toFixed(1)} ± ${sd.toFixed(1)}`,
@@ -739,6 +753,9 @@ function summarize(samples, trueAge, trueGender) {
             correct: `${correct}/${insSamples.length}`,
         });
     }
+
+    benchHistory.push(runSummary);
+    renderHistory();
 
     benchTbody.innerHTML = rows.map(r => {
         const errClass = Math.abs(r.err) <= 5 ? "bench-good" : "bench-bad";
@@ -754,6 +771,65 @@ function summarize(samples, trueAge, trueGender) {
     benchEmpty.style.display = "none";
 }
 
+function renderHistory() {
+    const wrap = document.getElementById("bench-history-wrap");
+    const tbody = document.getElementById("bench-history-tbody");
+    const tfoot = document.getElementById("bench-history-tfoot");
+    if (benchHistory.length === 0) {
+        wrap.style.display = "none";
+        return;
+    }
+    wrap.style.display = "";
+
+    const fmtErr = (e) => {
+        const s = (e >= 0 ? "+" : "") + e.toFixed(1);
+        const cls = Math.abs(e) <= 5 ? "bench-good" : "bench-bad";
+        return `<span class="${cls}">${s}</span>`;
+    };
+
+    tbody.innerHTML = benchHistory.map((r, i) => {
+        const c = r.caffe ? `${fmtErr(r.caffe.err)} · ${r.caffe.gender}/${r.caffe.total}` : "—";
+        const m = r.mob ? `${fmtErr(r.mob.err)} / ±${r.mob.std.toFixed(1)} · ${r.mob.gender}/${r.mob.total}` : "—";
+        const n = r.ins ? `${fmtErr(r.ins.err)} / ±${r.ins.std.toFixed(1)} · ${r.ins.gender}/${r.ins.total}` : "—";
+        return `<tr><td>#${i + 1}</td><td>${c}</td><td>${m}</td><td>${n}</td></tr>`;
+    }).join("");
+
+    if (benchHistory.length >= 2) {
+        const agg = (key) => {
+            const vals = benchHistory.map(r => r[key]).filter(Boolean);
+            if (!vals.length) return null;
+            const errs = vals.map(v => v.err);
+            const stds = vals.map(v => v.std);
+            const gCorrect = vals.reduce((s, v) => s + v.gender, 0);
+            const gTotal = vals.reduce((s, v) => s + v.total, 0);
+            return {
+                meanErr: mean(errs),
+                errStd: std(errs),
+                meanStd: mean(stds),
+                gender: `${gCorrect}/${gTotal}`,
+            };
+        };
+        const aggRow = (a) => {
+            if (!a) return "—";
+            return `mean err ${fmtErr(a.meanErr)} · run-std ±${a.errStd.toFixed(1)} · within ±${a.meanStd.toFixed(1)} · ${a.gender}`;
+        };
+        const aC = agg("caffe"), aM = agg("mob"), aI = agg("ins");
+        tfoot.innerHTML = `<tr>
+            <td>累計</td>
+            <td style="font-size:0.72rem">${aC ? `mean err ${fmtErr(aC.meanErr)} · ${aC.gender}` : "—"}</td>
+            <td style="font-size:0.72rem">${aggRow(aM)}</td>
+            <td style="font-size:0.72rem">${aggRow(aI)}</td>
+        </tr>`;
+    } else {
+        tfoot.innerHTML = "";
+    }
+}
+
+document.getElementById("btn-bench-reset").addEventListener("click", () => {
+    benchHistory.length = 0;
+    renderHistory();
+});
+
 btnBench.addEventListener("click", async () => {
     if (benchRunning || !isRunning) return;
     benchRunning = true;
@@ -761,28 +837,76 @@ btnBench.addEventListener("click", async () => {
     benchLogs.innerHTML = "";
     benchTable.style.display = "none";
     benchEmpty.style.display = "";
-    benchEmpty.textContent = "取樣中...";
+    benchEmpty.textContent = "處理中...";
+
+    // Pause main detect loop to avoid ONNX runtime contention
+    const wasRunning = isRunning;
+    isRunning = false;
+    if (animFrameId) cancelAnimationFrame(animFrameId);
 
     const trueAge = parseFloat(benchAgeInput.value) || 0;
     const trueGender = benchGenderInput.value;
-    const samples = [];
 
-    for (let i = 0; i < BENCH_SAMPLES; i++) {
-        benchProgress.textContent = `取樣中 (${i + 1}/${BENCH_SAMPLES})...`;
-        const s = await runOneSample(i);
-        if (s) {
-            samples.push(s);
-            appendLog(s);
-        } else {
-            benchLogs.innerHTML += `<span class="log-row">#${i + 1} 未偵測到人臉</span>`;
+    try {
+        // ── Phase 1: capture 10 face frames ──
+        const frames = [];
+        for (let i = 0; i < BENCH_SAMPLES; i++) {
+            benchProgress.textContent = `階段 1/2 · 取樣人臉 (${i + 1}/${BENCH_SAMPLES})`;
+            try {
+                const frame = await captureOneFrame(i);
+                if (frame) {
+                    frames.push(frame);
+                    benchLogs.innerHTML += `<span class="log-row">#${i + 1} ✓ 取得人臉</span>`;
+                } else {
+                    benchLogs.innerHTML += `<span class="log-row">#${i + 1} ✗ 未偵測到人臉</span>`;
+                }
+            } catch (err) {
+                console.error(`[BENCH] 取樣 #${i + 1} 錯誤:`, err);
+                benchLogs.innerHTML += `<span class="log-row">#${i + 1} 錯誤: ${err.message}</span>`;
+            }
+            benchLogs.scrollTop = benchLogs.scrollHeight;
+            await new Promise(r => setTimeout(r, BENCH_INTERVAL_MS));
         }
-        await new Promise(r => setTimeout(r, BENCH_INTERVAL_MS));
-    }
 
-    benchProgress.textContent = `取樣完成 (${samples.length}/${BENCH_SAMPLES} 有效)`;
-    if (samples.length > 0) summarize(samples, trueAge, trueGender);
-    btnBench.disabled = false;
-    benchRunning = false;
+        if (frames.length === 0) {
+            benchProgress.textContent = "取樣失敗：未擷取到任何人臉";
+            return;
+        }
+
+        // ── Phase 2: run 3 methods on all captured frames ──
+        benchLogs.innerHTML += `<span class="log-row">— 取樣完成，開始推論 ${frames.length} 張 —</span>`;
+
+        benchProgress.textContent = `階段 2/2 · 方法 1 Caffe...`;
+        const caffeResults = await runMethod("caffe", inferCaffe, frames, "cropFace");
+
+        benchProgress.textContent = `階段 2/2 · 方法 2 MobileNetV2+DEX...`;
+        const mobResults = await runMethod("mobilenet", inferMobileNet, frames, "cropFace");
+
+        benchProgress.textContent = `階段 2/2 · 方法 3 InsightFace...`;
+        const insResults = await runMethod("insightface", inferInsightFace, frames, "alignedFace");
+
+        // Combine per-frame
+        const samples = frames.map((frame, i) => ({
+            idx: frame.idx,
+            caffe: caffeResults[i],
+            mob: mobResults[i],
+            ins: insResults[i],
+        }));
+        samples.forEach(appendLog);
+
+        benchProgress.textContent = `完成 (${samples.length}/${BENCH_SAMPLES} 張有效)`;
+        summarize(samples, trueAge, trueGender);
+    } catch (err) {
+        console.error("[BENCH] 取樣流程錯誤:", err);
+        benchProgress.textContent = `取樣失敗: ${err.message}`;
+    } finally {
+        btnBench.disabled = false;
+        benchRunning = false;
+        if (wasRunning) {
+            isRunning = true;
+            detectLoop();
+        }
+    }
 });
 
 // Enable bench button when detection starts
