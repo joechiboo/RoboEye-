@@ -27,7 +27,17 @@
             font-size: 1.8rem;
             font-weight: 700;
             color: #00e676;
+            cursor: pointer;
+            user-select: none;
+            display: inline-block;
         }
+        header h1:hover { opacity: 0.8; }
+
+        body.hide-bench #app {
+            grid-template-columns: minmax(0, 1fr);
+            max-width: 720px;
+        }
+        body.hide-bench .col-right { display: none; }
 
         header p {
             font-size: 0.9rem;
@@ -432,6 +442,11 @@
     };
 
     let currentMethod = "caffe";
+
+    // Toggle benchmark panel by clicking the title
+    document.querySelector("header h1").addEventListener("click", () => {
+        document.body.classList.toggle("hide-bench");
+    });
 
     document.querySelectorAll(".method-btn").forEach(btn => {
         btn.addEventListener("click", () => {
