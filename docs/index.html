@@ -36,13 +36,27 @@
         }
 
         #app {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1rem;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            align-items: start;
+            gap: 1.5rem;
             padding: 0 1rem 2rem;
             width: 100%;
-            max-width: 720px;
+            max-width: 1400px;
+        }
+
+        .col-left, .col-right {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-width: 0;
+        }
+
+        @media (max-width: 960px) {
+            #app {
+                grid-template-columns: 1fr;
+                max-width: 720px;
+            }
         }
 
         .video-container {
@@ -160,6 +174,116 @@
         }
 
         footer a { color: #00e676; text-decoration: none; }
+
+        .benchmark {
+            width: 100%;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 1rem;
+        }
+
+        .benchmark h3 {
+            font-size: 1rem;
+            color: #00e676;
+            margin-bottom: 0.8rem;
+        }
+
+        .benchmark-form {
+            display: flex;
+            gap: 0.6rem;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 0.8rem;
+        }
+
+        .benchmark-form label { font-size: 0.85rem; color: #aaa; }
+
+        .benchmark-form input, .benchmark-form select {
+            padding: 0.4rem 0.6rem;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            width: 70px;
+        }
+
+        #btn-bench {
+            background: #2196f3;
+            color: #fff;
+            padding: 0.4rem 1rem;
+            font-size: 0.85rem;
+        }
+        #btn-bench:hover { background: #1976d2; }
+        #btn-bench:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+        .bench-progress {
+            font-size: 0.85rem;
+            color: #888;
+            margin-bottom: 0.5rem;
+        }
+
+        .bench-cols {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .bench-col h4 {
+            font-size: 0.8rem;
+            color: #888;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+            font-weight: 600;
+        }
+
+        .bench-logs {
+            background: #0f0f0f;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            padding: 0.5rem;
+            font-family: "Consolas", "Monaco", monospace;
+            font-size: 0.75rem;
+            color: #ccc;
+            max-height: 240px;
+            min-height: 120px;
+            overflow-y: auto;
+            white-space: pre;
+        }
+
+        .bench-logs .log-row { display: block; }
+        .bench-logs .log-method-1 { color: #ff8a65; }
+        .bench-logs .log-method-2 { color: #64b5f6; }
+        .bench-logs .log-method-3 { color: #00e676; }
+
+        table.bench-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        table.bench-table th, table.bench-table td {
+            padding: 0.5rem;
+            text-align: center;
+            border-bottom: 1px solid #2a2a2a;
+        }
+
+        table.bench-table th {
+            color: #888;
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+        }
+
+        table.bench-table td:first-child {
+            text-align: left;
+            color: #00e676;
+            font-weight: 600;
+        }
+
+        .bench-good { color: #00e676; }
+        .bench-bad { color: #ff5252; }
     </style>
 </head>
 <body>
@@ -170,29 +294,69 @@
 </header>
 
 <div id="app">
-    <div class="video-container">
-        <video id="webcam" autoplay playsinline muted></video>
-        <canvas id="overlay"></canvas>
+    <div class="col-left">
+        <div class="video-container">
+            <video id="webcam" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+        </div>
+
+        <div class="method-selector">
+            <button class="method-btn active" data-method="caffe">方法 1: Caffe (2015)</button>
+            <button class="method-btn" data-method="mobilenet">方法 2: MobileNetV2 + DEX</button>
+            <button class="method-btn" data-method="insightface">方法 3: InsightFace</button>
+        </div>
+        <div class="method-info" id="method-info">Levi & Hassner — 8 個年齡區間分類，經典基礎模型</div>
+
+        <div class="controls">
+            <button id="btn-start">開始偵測</button>
+            <button id="btn-stop" disabled>停止</button>
+        </div>
+
+        <div id="status">載入模型中...</div>
+
+        <div class="stats">
+            <div>FPS: <span id="fps">0</span></div>
+            <div>偵測人臉: <span id="face-count">0</span></div>
+            <div>模型: <span id="current-method">Caffe</span></div>
+        </div>
     </div>
 
-    <div class="method-selector">
-        <button class="method-btn active" data-method="caffe">方法 1: Caffe (2015)</button>
-        <button class="method-btn" data-method="mobilenet">方法 2: MobileNetV2 + DEX</button>
-        <button class="method-btn" data-method="insightface">方法 3: InsightFace</button>
-    </div>
-    <div class="method-info" id="method-info">Levi & Hassner — 8 個年齡區間分類，經典基礎模型</div>
-
-    <div class="controls">
-        <button id="btn-start">開始偵測</button>
-        <button id="btn-stop" disabled>停止</button>
-    </div>
-
-    <div id="status">載入模型中...</div>
-
-    <div class="stats">
-        <div>FPS: <span id="fps">0</span></div>
-        <div>偵測人臉: <span id="face-count">0</span></div>
-        <div>模型: <span id="current-method">Caffe</span></div>
+    <div class="col-right">
+        <div class="benchmark">
+        <h3>三方法準確度比較</h3>
+        <div class="benchmark-form">
+            <label>實際年齡</label>
+            <input type="number" id="bench-age" value="39" min="0" max="120">
+            <label>性別</label>
+            <select id="bench-gender">
+                <option value="Male" selected>Male</option>
+                <option value="Female">Female</option>
+            </select>
+            <button id="btn-bench" disabled>開始取樣 (10 次)</button>
+        </div>
+        <div class="bench-progress" id="bench-progress">請先「開始偵測」並對準鏡頭，再按取樣</div>
+        <div class="bench-cols">
+            <div class="bench-col">
+                <h4>取樣 Logs</h4>
+                <div class="bench-logs" id="bench-logs">尚未取樣</div>
+            </div>
+            <div class="bench-col">
+                <h4>結果統計</h4>
+                <table class="bench-table" id="bench-table" style="display:none">
+                    <thead>
+                        <tr>
+                            <th>方法</th>
+                            <th>年齡 (平均±std)</th>
+                            <th>誤差</th>
+                            <th>性別</th>
+                        </tr>
+                    </thead>
+                    <tbody id="bench-tbody"></tbody>
+                </table>
+                <div id="bench-empty" style="color:#666;font-size:0.85rem;padding:1rem;text-align:center">尚未有結果</div>
+            </div>
+        </div>
+        </div>
     </div>
 </div>
 

@@ -623,6 +623,173 @@ btnStop.addEventListener("click", () => {
     faceCountEl.textContent = "0";
 });
 
+// ── Benchmark: compare 3 methods on N samples ──────────
+
+const BENCH_SAMPLES = 10;
+const BENCH_INTERVAL_MS = 500;
+
+const btnBench = document.getElementById("btn-bench");
+const benchAgeInput = document.getElementById("bench-age");
+const benchGenderInput = document.getElementById("bench-gender");
+const benchProgress = document.getElementById("bench-progress");
+const benchLogs = document.getElementById("bench-logs");
+const benchTable = document.getElementById("bench-table");
+const benchTbody = document.getElementById("bench-tbody");
+const benchEmpty = document.getElementById("bench-empty");
+
+let benchRunning = false;
+
+// Caffe age bracket midpoints for numeric error calculation
+const CAFFE_AGE_MIDPOINT = {
+    "(0-2)": 1, "(4-6)": 5, "(8-12)": 10, "(15-20)": 17,
+    "(25-32)": 28, "(38-43)": 40, "(48-53)": 50, "(60-100)": 80,
+};
+
+function mean(arr) { return arr.reduce((a, b) => a + b, 0) / arr.length; }
+function std(arr) {
+    const m = mean(arr);
+    return Math.sqrt(arr.reduce((s, v) => s + (v - m) ** 2, 0) / arr.length);
+}
+
+async function detectFaceForBench() {
+    const opts = faceapi.nets.tinyFaceDetector.isLoaded
+        ? new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })
+        : new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 });
+    const dets = faceapi.nets.faceLandmark68Net.isLoaded
+        ? await faceapi.detectAllFaces(video, opts).withFaceLandmarks()
+        : await faceapi.detectAllFaces(video, opts);
+    return dets.length > 0 ? dets[0] : null;
+}
+
+async function runOneSample(idx) {
+    const det = await detectFaceForBench();
+    if (!det) return null;
+    const box = det.detection ? det.detection.box : det.box;
+    const cropFace = extractFace(box);
+    if (cropFace.width < 10) return null;
+    const alignedFace = (det.landmarks && faceapi.nets.faceLandmark68Net.isLoaded)
+        ? alignFace(det.landmarks, 96)
+        : cropFace;
+
+    const [caffe, mob, ins] = await Promise.all([
+        inferCaffe(cropFace),
+        inferMobileNet(cropFace),
+        inferInsightFace(alignedFace),
+    ]);
+    return { idx: idx + 1, caffe, mob, ins };
+}
+
+function appendLog(sample) {
+    const c = sample.caffe ? `${sample.caffe.age.padEnd(8)} ${sample.caffe.gender[0]}` : "  --      -";
+    const m = sample.mob ? `${parseFloat(sample.mob.age).toFixed(1).padStart(5)}    ${sample.mob.gender[0]}` : "  --     -";
+    const i = sample.ins ? `${sample.ins.age.padStart(3)}      ${sample.ins.gender[0]}` : " --      -";
+    const line = `#${String(sample.idx).padStart(2)} `
+        + `<span class="log-method-1">[1] ${c}</span>  `
+        + `<span class="log-method-2">[2] ${m}</span>  `
+        + `<span class="log-method-3">[3] ${i}</span>`;
+    benchLogs.innerHTML += `<span class="log-row">${line}</span>`;
+    benchLogs.scrollTop = benchLogs.scrollHeight;
+}
+
+function summarize(samples, trueAge, trueGender) {
+    const rows = [];
+
+    // Method 1: Caffe (bracket)
+    const caffeSamples = samples.map(s => s.caffe).filter(Boolean);
+    if (caffeSamples.length) {
+        const ages = caffeSamples.map(s => CAFFE_AGE_MIDPOINT[s.age] || 0);
+        const m = mean(ages);
+        const correct = caffeSamples.filter(s => s.gender === trueGender).length;
+        // Most common bracket
+        const bracketCount = {};
+        caffeSamples.forEach(s => bracketCount[s.age] = (bracketCount[s.age] || 0) + 1);
+        const topBracket = Object.entries(bracketCount).sort((a, b) => b[1] - a[1])[0][0];
+        rows.push({
+            name: "方法1 Caffe",
+            ageStr: `${topBracket} (mid ${m.toFixed(0)})`,
+            err: m - trueAge,
+            correct: `${correct}/${caffeSamples.length}`,
+        });
+    }
+
+    // Method 2: MobileNetV2
+    const mobSamples = samples.map(s => s.mob).filter(Boolean);
+    if (mobSamples.length) {
+        const ages = mobSamples.map(s => parseFloat(s.age));
+        const m = mean(ages), sd = std(ages);
+        const correct = mobSamples.filter(s => s.gender === trueGender).length;
+        rows.push({
+            name: "方法2 DEX",
+            ageStr: `${m.toFixed(1)} ± ${sd.toFixed(1)}`,
+            err: m - trueAge,
+            correct: `${correct}/${mobSamples.length}`,
+        });
+    }
+
+    // Method 3: InsightFace
+    const insSamples = samples.map(s => s.ins).filter(Boolean);
+    if (insSamples.length) {
+        const ages = insSamples.map(s => parseFloat(s.age));
+        const m = mean(ages), sd = std(ages);
+        const correct = insSamples.filter(s => s.gender === trueGender).length;
+        rows.push({
+            name: "方法3 InsightFace",
+            ageStr: `${m.toFixed(1)} ± ${sd.toFixed(1)}`,
+            err: m - trueAge,
+            correct: `${correct}/${insSamples.length}`,
+        });
+    }
+
+    benchTbody.innerHTML = rows.map(r => {
+        const errClass = Math.abs(r.err) <= 5 ? "bench-good" : "bench-bad";
+        const errStr = (r.err >= 0 ? "+" : "") + r.err.toFixed(1);
+        return `<tr>
+            <td>${r.name}</td>
+            <td>${r.ageStr}</td>
+            <td class="${errClass}">${errStr}</td>
+            <td>${r.correct}</td>
+        </tr>`;
+    }).join("");
+    benchTable.style.display = "";
+    benchEmpty.style.display = "none";
+}
+
+btnBench.addEventListener("click", async () => {
+    if (benchRunning || !isRunning) return;
+    benchRunning = true;
+    btnBench.disabled = true;
+    benchLogs.innerHTML = "";
+    benchTable.style.display = "none";
+    benchEmpty.style.display = "";
+    benchEmpty.textContent = "取樣中...";
+
+    const trueAge = parseFloat(benchAgeInput.value) || 0;
+    const trueGender = benchGenderInput.value;
+    const samples = [];
+
+    for (let i = 0; i < BENCH_SAMPLES; i++) {
+        benchProgress.textContent = `取樣中 (${i + 1}/${BENCH_SAMPLES})...`;
+        const s = await runOneSample(i);
+        if (s) {
+            samples.push(s);
+            appendLog(s);
+        } else {
+            benchLogs.innerHTML += `<span class="log-row">#${i + 1} 未偵測到人臉</span>`;
+        }
+        await new Promise(r => setTimeout(r, BENCH_INTERVAL_MS));
+    }
+
+    benchProgress.textContent = `取樣完成 (${samples.length}/${BENCH_SAMPLES} 有效)`;
+    if (samples.length > 0) summarize(samples, trueAge, trueGender);
+    btnBench.disabled = false;
+    benchRunning = false;
+});
+
+// Enable bench button when detection starts
+const origStartHandler = btnStart.onclick;
+btnStart.addEventListener("click", () => { btnBench.disabled = false; });
+btnStop.addEventListener("click", () => { btnBench.disabled = true; });
+
 // ── Start ─────────────────────────────────────────────
 
 init();
