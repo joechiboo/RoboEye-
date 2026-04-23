@@ -28,11 +28,11 @@ def main():
     model.eval()
     print(f"[INFO] 載入 checkpoint (Epoch {ckpt['epoch']}, MAE: {ckpt['val_mae']:.2f})")
 
-    # 匯出 ONNX
+    # 匯出 ONNX (使用舊版 exporter，權重嵌入單一檔案，方便瀏覽器載入)
     dummy_input = torch.randn(1, 3, 224, 224)
     torch.onnx.export(
         model,
-        dummy_input,
+        (dummy_input,),
         args.output,
         input_names=["input"],
         output_names=["age_logits", "gender_logits"],
@@ -42,6 +42,7 @@ def main():
             "gender_logits": {0: "batch"},
         },
         opset_version=17,
+        dynamo=False,  # 用 legacy exporter 避免權重外部化
     )
     print(f"[INFO] ONNX 模型已匯出至 {args.output}")
 

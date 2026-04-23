@@ -111,7 +111,25 @@ def main():
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     parser.add_argument("--num-workers", type=int, default=0,
                         help="DataLoader workers (Windows 建議 0)")
+    parser.add_argument("--log", type=str, default=None,
+                        help="同時寫入 log 檔")
     args = parser.parse_args()
+
+    # 設定 logging：同時輸出到 console 和 log 檔
+    import sys
+    if args.log:
+        log_file = open(args.log, "w", encoding="utf-8")
+        class Tee:
+            def __init__(self, *streams):
+                self.streams = streams
+            def write(self, data):
+                for s in self.streams:
+                    s.write(data)
+                    s.flush()
+            def flush(self):
+                for s in self.streams:
+                    s.flush()
+        sys.stdout = Tee(sys.__stdout__, log_file)
 
     # 裝置
     if args.device == "auto":
@@ -158,8 +176,18 @@ def main():
             f"Train Loss: {train_metrics['loss']:.4f}  MAE: {train_metrics['age_mae']:.2f}  "
             f"Gender: {train_metrics['gender_acc']:.1%} | "
             f"Val Loss: {val_metrics['loss']:.4f}  MAE: {val_metrics['age_mae']:.2f}  "
-            f"Gender: {val_metrics['gender_acc']:.1%}"
+            f"Gender: {val_metrics['gender_acc']:.1%}",
+            flush=True,
         )
+
+        # 每個 epoch 都存 latest（中斷也不怕）
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "val_mae": val_metrics["age_mae"],
+            "val_gender_acc": val_metrics["gender_acc"],
+        }, os.path.join(args.checkpoint_dir, "latest.pth"))
 
         # 儲存最佳模型
         if val_metrics["age_mae"] < best_mae:
@@ -171,7 +199,7 @@ def main():
                 "val_mae": best_mae,
                 "val_gender_acc": val_metrics["gender_acc"],
             }, path)
-            print(f"  → 儲存最佳模型 (MAE: {best_mae:.2f})")
+            print(f"  → 儲存最佳模型 (MAE: {best_mae:.2f})", flush=True)
 
     print(f"\n[完成] 最佳驗證 MAE: {best_mae:.2f}")
 

@@ -420,15 +420,16 @@ function alignFace(landmarks, size) {
     return canvas;
 }
 
-// ── Age history (5-second sliding window) ────────────
+// ── Age / Gender history (sliding window) ─────────────
 
 const AGE_WINDOW_MS = 3000;
+const GENDER_WINDOW_MS = 2000;
 const ageHistory = []; // { time, age }
+const genderHistory = []; // { time, gender, confidence }
 
 function pushAge(age) {
     const now = performance.now();
     ageHistory.push({ time: now, age });
-    // Evict entries older than 5 seconds
     while (ageHistory.length > 0 && now - ageHistory[0].time > AGE_WINDOW_MS) {
         ageHistory.shift();
     }
@@ -445,6 +446,52 @@ function getAgeRange() {
     const trimmed = ages.slice(trim, ages.length - trim);
     if (trimmed.length === 0) return { min: ages[0], max: ages[ages.length - 1] };
     return { min: trimmed[0], max: trimmed[trimmed.length - 1] };
+}
+
+function pushGender(gender, confidence) {
+    const now = performance.now();
+    genderHistory.push({ time: now, gender, confidence });
+    while (genderHistory.length > 0 && now - genderHistory[0].time > GENDER_WINDOW_MS) {
+        genderHistory.shift();
+    }
+}
+
+function getStableGender() {
+    if (genderHistory.length === 0) return null;
+    // Majority vote within window
+    const counts = {};
+    for (const e of genderHistory) {
+        counts[e.gender] = (counts[e.gender] || 0) + 1;
+    }
+    let bestGender = null, bestCount = 0;
+    for (const g of Object.keys(counts)) {
+        if (counts[g] > bestCount) { bestCount = counts[g]; bestGender = g; }
+    }
+    // Confidence range among frames matching the winning gender
+    const matching = genderHistory.filter(e => e.gender === bestGender).map(e => e.confidence);
+    matching.sort((a, b) => a - b);
+    return {
+        gender: bestGender,
+        minConf: matching[0],
+        maxConf: matching[matching.length - 1],
+        ratio: bestCount / genderHistory.length,
+    };
+}
+
+// ── FPS smoothing (rolling average) ───────────────────
+
+const FPS_WINDOW = 30;
+const fpsHistory = [];
+
+function pushFps(fps) {
+    fpsHistory.push(fps);
+    if (fpsHistory.length > FPS_WINDOW) fpsHistory.shift();
+}
+
+function getSmoothFps() {
+    if (fpsHistory.length === 0) return 0;
+    const sum = fpsHistory.reduce((a, b) => a + b, 0);
+    return sum / fpsHistory.length;
 }
 
 // ── Detection loop ────────────────────────────────────
@@ -504,7 +551,21 @@ async function detectLoop() {
                     ? `${Math.round(range.min)} - ${Math.round(range.max)}y`
                     : `${result.age}y`;
             }
-            const label = `${ageLabel}, ${result.gender} (${(result.confidence * 100).toFixed(0)}%)`;
+
+            // Smooth gender: majority vote in 2-second window, show confidence range
+            pushGender(result.gender, result.confidence);
+            const stable = getStableGender();
+            let genderLabel;
+            if (stable) {
+                const lo = Math.round(stable.minConf * 100);
+                const hi = Math.round(stable.maxConf * 100);
+                const confStr = lo === hi ? `${lo}%` : `${lo}-${hi}%`;
+                genderLabel = `${stable.gender} (${confStr})`;
+            } else {
+                genderLabel = `${result.gender} (${(result.confidence * 100).toFixed(0)}%)`;
+            }
+
+            const label = `${ageLabel}, ${genderLabel}`;
             ctx.font = "bold 14px sans-serif";
             const textWidth = ctx.measureText(label).width;
 
@@ -521,7 +582,8 @@ async function detectLoop() {
     }
 
     const elapsed = performance.now() - t0;
-    fpsEl.textContent = Math.round(1000 / elapsed);
+    pushFps(1000 / elapsed);
+    fpsEl.textContent = Math.round(getSmoothFps());
 
     animFrameId = requestAnimationFrame(detectLoop);
 }
@@ -548,6 +610,9 @@ btnStop.addEventListener("click", () => {
     if (animFrameId) cancelAnimationFrame(animFrameId);
     stopWebcam();
     ctx.clearRect(0, 0, overlay.width, overlay.height);
+    ageHistory.length = 0;
+    genderHistory.length = 0;
+    fpsHistory.length = 0;
     btnStart.disabled = false;
     btnStop.disabled = true;
     statusEl.textContent = "已停止";
