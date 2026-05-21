@@ -44,9 +44,9 @@ RoboEye/
 | 3 | InsightFace buffalo_l | 大型預訓練模型 | 精確數字 | 否 | ✅ 可跑 |
 
 ### 核心論文
-1. **DEX** (ICCV 2015) — VGG-16 + softmax expected value，年齡預測經典方法 → 對應方案 2
-2. **REGA** (Review) — 即時情緒/性別/年齡三合一 CNN 架構 → 對應方案 1
-3. **Age & Gender with Transfer Learning** (arXiv 2021) — MobileNet/EfficientNet 輕量方案 → 對應方案 3
+1. [**DEX** (ICCV 2015)](https://openaccess.thecvf.com/content_iccv_2015_workshops/w11/papers/Rothe_DEX_Deep_EXpectation_ICCV_2015_paper.pdf) — VGG-16 + softmax expected value，年齡預測經典方法 → 對應方案 2
+2. [**REGA** (Review)](https://www.researchgate.net/publication/348637154_REGA_Real-Time_Emotion_Gender_Age_Detection_Using_CNN-A_Review) — 即時情緒/性別/年齡三合一 CNN 架構 → 對應方案 1
+3. [**Age & Gender with Transfer Learning** (arXiv 2021)](https://arxiv.org/pdf/2110.12633) — MobileNet/EfficientNet 輕量方案 → 對應方案 3
 
 ## 🗓️ 時程規劃
 
